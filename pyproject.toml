@@ -1,0 +1,19 @@
+[project]
+name = "ship-mcp"
+version = "0.1.0"
+description = "조선소(선박) 용어 MCP 서버 - Shipbuilding Terminology MCP Server"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "ShipMCP" },
+]
+dependencies = [
+    "mcp>=1.27,<2",
+]
+
+[project.scripts]
+ship-mcp = "ship_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
