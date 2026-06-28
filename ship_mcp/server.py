@@ -14,24 +14,41 @@ MCP Primitives provided:
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import click
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
-from ship_mcp.data.categories import CATEGORIES, get_category, list_categories
-from ship_mcp.data.terms import (
-    ALL_TERMS,
+from ship_mcp.data.repository import (
+    count_terms,
+    get_category,
+    get_repository,
     get_related_terms,
     get_term,
     get_term_by_name,
     get_terms_by_category,
+    list_all_terms,
+    list_categories,
+    reset_repository,
     search_terms,
 )
 
 # ── MCP Server ──────────────────────────────────────────────────────────────
 
 mcp = FastMCP("ShipMCP — 조선소 선박 용어 서버", json_response=True)
+TOOL_SERVICE_NAME = "조선/선박 용어 MCP"
+
+
+def _readonly_tool_annotations(title: str) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -62,7 +79,8 @@ def get_category_resource(category_id: str) -> str:
     """
     cat = get_category(category_id)
     if not cat:
-        return f"# Category not found\n\nNo category with ID '{category_id}'.\n\nAvailable IDs: {', '.join(c['id'] for c in CATEGORIES)}"
+        categories = list_categories()
+        return f"# Category not found\n\nNo category with ID '{category_id}'.\n\nAvailable IDs: {', '.join(c['id'] for c in categories)}"
 
     terms = get_terms_by_category(category_id)
 
@@ -184,7 +202,7 @@ def full_glossary() -> str:
         "|---|---|---|",
     ]
 
-    for term in ALL_TERMS:
+    for term in list_all_terms():
         cat = get_category(term["category"])
         cat_name = f"{cat['icon']} {cat['name_en']}" if cat else term["category"]
         abbr = f" ({term['abbreviation']})" if term["abbreviation"] else ""
@@ -197,7 +215,10 @@ def full_glossary() -> str:
 # TOOLS — Functions the LLM can invoke
 # ══════════════════════════════════════════════════════════════════════════════
 
-@mcp.tool()
+@mcp.tool(
+    description=f"{TOOL_SERVICE_NAME}: Search shipbuilding terminology by keyword.",
+    annotations=_readonly_tool_annotations("Search Ship Terms"),
+)
 def search_ship_terms(query: str, max_results: int = 10) -> list[dict[str, Any]]:
     """Search shipbuilding terminology by keyword.
     IMPORTANT: Use this for ANY shipbuilding question, including Korean terms!
@@ -228,7 +249,10 @@ def search_ship_terms(query: str, max_results: int = 10) -> list[dict[str, Any]]
     ]
 
 
-@mcp.tool()
+@mcp.tool(
+    description=f"{TOOL_SERVICE_NAME}: Get detailed information for a shipbuilding term.",
+    annotations=_readonly_tool_annotations("Get Term Detail"),
+)
 def get_term_detail(term_id_or_name: str) -> dict[str, Any] | str:
     """Get detailed information about a specific shipbuilding term.
     IMPORTANT: Call this after search_ship_terms() to get FULL details.
@@ -276,7 +300,10 @@ def get_term_detail(term_id_or_name: str) -> dict[str, Any] | str:
     return result
 
 
-@mcp.tool()
+@mcp.tool(
+    description=f"{TOOL_SERVICE_NAME}: List shipbuilding terms in a category.",
+    annotations=_readonly_tool_annotations("List Terms by Category"),
+)
 def list_terms_by_category(category_id: str) -> list[dict[str, Any]]:
     """List all shipbuilding terms in a specific category.
 
@@ -292,7 +319,7 @@ def list_terms_by_category(category_id: str) -> list[dict[str, Any]]:
     """
     cat = get_category(category_id)
     if not cat:
-        available = [c["id"] for c in CATEGORIES]
+        available = [c["id"] for c in list_categories()]
         return [{"error": f"Unknown category '{category_id}'", "available_categories": available}]
 
     terms = get_terms_by_category(category_id)
@@ -307,7 +334,10 @@ def list_terms_by_category(category_id: str) -> list[dict[str, Any]]:
     ]
 
 
-@mcp.tool()
+@mcp.tool(
+    description=f"{TOOL_SERVICE_NAME}: List all shipbuilding terminology categories.",
+    annotations=_readonly_tool_annotations("List Categories"),
+)
 def list_categories_tool() -> list[dict[str, Any]]:
     """List all shipbuilding terminology categories.
 
@@ -324,11 +354,14 @@ def list_categories_tool() -> list[dict[str, Any]]:
             "icon": c["icon"],
             "term_count": len(get_terms_by_category(c["id"])),
         }
-        for c in CATEGORIES
+        for c in list_categories()
     ]
 
 
-@mcp.tool()
+@mcp.tool(
+    description=f"{TOOL_SERVICE_NAME}: Translate terms between English and Korean.",
+    annotations=_readonly_tool_annotations("Translate Term"),
+)
 def translate_term(term: str, from_lang: str = "en", to_lang: str = "ko") -> dict[str, Any] | str:
     """Translate a shipbuilding term between English and Korean.
 
@@ -366,16 +399,20 @@ def translate_term(term: str, from_lang: str = "en", to_lang: str = "ko") -> dic
         }
 
 
-@mcp.tool()
+@mcp.tool(
+    description=f"{TOOL_SERVICE_NAME}: Get glossary statistics by category.",
+    annotations=_readonly_tool_annotations("Get Term Statistics"),
+)
 def get_term_statistics() -> dict[str, Any]:
     """Get statistics about the shipbuilding terminology database.
 
     Returns:
         Count of terms, categories, and category-wise distribution
     """
-    total = len(ALL_TERMS)
+    categories = list_categories()
+    total = count_terms()
     cat_stats = {}
-    for cat in CATEGORIES:
+    for cat in categories:
         count = len(get_terms_by_category(cat["id"]))
         if count > 0:
             cat_stats[cat["id"]] = {
@@ -387,7 +424,7 @@ def get_term_statistics() -> dict[str, Any]:
 
     return {
         "total_terms": total,
-        "total_categories": len(CATEGORIES),
+        "total_categories": len(categories),
         "categories_with_terms": len(cat_stats),
         "by_category": cat_stats,
     }
@@ -501,7 +538,12 @@ def compare_terms(term1: str, term2: str) -> str:
     default="127.0.0.1",
     help="Bind address (use 0.0.0.0 for remote access)",
 )
-def main(transport: str, port: int, host: str) -> None:
+@click.option(
+    "--db-path",
+    default=None,
+    help="SQLite DB file path (default: ship_mcp/data/ship_terms.db or SHIP_MCP_DB_PATH)",
+)
+def main(transport: str, port: int, host: str, db_path: str | None) -> None:
     """Run the ShipMCP server.
 
     Examples:
@@ -515,6 +557,12 @@ def main(transport: str, port: int, host: str) -> None:
         # SSE mode -- alternative HTTP, local only
         uv run ship-mcp --transport sse --port 8000
     """
+    if db_path:
+        os.environ["SHIP_MCP_DB_PATH"] = db_path
+        reset_repository()
+
+    get_repository()
+
     # Set host/port on mcp settings for HTTP transports
     mcp.settings.host = host
     mcp.settings.port = port
